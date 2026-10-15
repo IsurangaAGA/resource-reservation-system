@@ -1,0 +1,111 @@
+// Prisma schema for the Resource Reservation Management System.
+// Prisma 7: the connection URL lives in prisma.config.ts, and the client is
+// generated into src/generated/prisma (imported via "@/generated/prisma/client").
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+}
+
+enum ResourceType {
+  MEETING_ROOM
+  EQUIPMENT
+  VEHICLE
+  WORKSPACE
+  OTHER
+}
+
+/// Administrative availability of a resource. Time-based availability is
+/// derived from reservations; this flag controls whether it can be booked at all.
+enum ResourceStatus {
+  AVAILABLE
+  MAINTENANCE
+  RETIRED
+}
+
+enum ReservationStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+model User {
+  id           String        @id @default(cuid())
+  name         String
+  /// Always stored lower-cased so lookups are case-insensitive.
+  email        String        @unique
+  department   String?
+  role         UserRole      @default(MEMBER)
+  /// scrypt hash ("scrypt$N$r$p$salt$hash"). Null means the account cannot sign in.
+  passwordHash String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  reservations Reservation[]
+  sessions     Session[]
+
+  @@map("users")
+}
+
+/// Server-side login session. The cookie holds a random token; only its
+/// SHA-256 hash is stored, so a database leak does not expose live sessions.
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now())
+  userAgent String?
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Resource {
+  id           String         @id @default(cuid())
+  name         String         @unique
+  type         ResourceType
+  description  String?
+  location     String
+  capacity     Int?
+  status       ResourceStatus @default(AVAILABLE)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  reservations Reservation[]
+
+  @@index([type])
+  @@index([status])
+  @@map("resources")
+}
+
+model Reservation {
+  id          String            @id @default(cuid())
+  title       String
+  notes       String?
+  startTime   DateTime          @db.Timestamptz(3)
+  endTime     DateTime          @db.Timestamptz(3)
+  status      ReservationStatus @default(CONFIRMED)
+  cancelledAt DateTime?         @db.Timestamptz(3)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  // Restrict: a resource/user with booking history must be retired, not deleted.
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  // Supports the overlap query: WHERE resourceId = ? AND status = ? AND startTime < ? AND endTime > ?
+  @@index([resourceId, status, startTime, endTime])
+  @@index([userId, startTime])
+  @@map("reservations")
+}
